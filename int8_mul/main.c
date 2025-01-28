@@ -119,7 +119,7 @@ void mul_amx(int32_t c[8][8], const int8_t a[8][32], const int8_t b[32][8]) {
     _tile_dpbssd(TILE_0, TILE_1, TILE_2);
 
     // Store the result back to C
-    _tile_stored(c, 8 * sizeof(int32_t), TILE_0);
+    _tile_stored(TILE_0, c, 8 * sizeof(int32_t));
 }
 
 // -----------------------------------------------
@@ -147,9 +147,9 @@ int main() {
     mul_naive(c_naive, a, b);
     mul_amx(c_amx, a, b);
 
-    print("----------------------------------------------- Naive result\n");
+    printf("----------------------------------------------- Naive result\n");
     print_mat8x8(c_naive);
-    print("----------------------------------------------- AMX result\n");
+    printf("----------------------------------------------- AMX result\n");
     print_mat8x8(c_amx);
 
     _tile_release(); // Release the AMX state
