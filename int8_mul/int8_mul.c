@@ -4,8 +4,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#if defined(__linux__)
 #include <sys/syscall.h>
 #include <unistd.h>
+
+#define ARCH_GET_XCOMP_PERM 0x1022
+#define ARCH_REQ_XCOMP_PERM 0x1023
+#define XFEATURE_XTILECFG 17
+#define XFEATURE_XTILEDATA 18
+#endif
 
 void init_mat_a(int8_t a[8][32]) {
     for (int r = 0; r < 32; ++r) {
@@ -48,11 +56,6 @@ void mul_naive(int32_t c[8][8], const int8_t a[8][32], const int8_t b[32][8]) {
 // -----------------------------------------------
 // See: https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#!=undefined&techs=AMX
 
-#define ARCH_GET_XCOMP_PERM 0x1022
-#define ARCH_REQ_XCOMP_PERM 0x1023
-#define XFEATURE_XTILECFG 17
-#define XFEATURE_XTILEDATA 18
-
 typedef struct tile_config_t {
     uint8_t palette_id;         // 0
     uint8_t start_row;          // 1
@@ -78,7 +81,7 @@ void init_tile_config() {
     tile.rows[1] = 8;
 
     // config for int8 b[32][8]
-    // The alignment of B is a bit tricky.
+    // The alignment of B in AMX is a bit tricky.
     // The rows of B are divided by 4 byte elements.
     tile.colsb[2] = (8 * 4) * sizeof(int8_t); // 32
     tile.rows[2] = 32 / 4;                    // 8
@@ -87,6 +90,7 @@ void init_tile_config() {
 // -----------------------------------------------
 
 int main() {
+#if defined(__linux__)
     if (syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA)) {
         printf("\n Fail to do XFEATURE_XTILEDATA \n\n");
         fflush(stdout);
@@ -94,8 +98,7 @@ int main() {
     } else {
         return true;
     }
-
-    // TODO
+#endif
 
     // -----------------------------------------------
 }
