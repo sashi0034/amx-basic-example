@@ -15,23 +15,23 @@
 #define XFEATURE_XTILEDATA 18
 #endif
 
-void init_mat_a(int8_t a[8][32]) {
+void init_mat_a(int8_t a[16][32]) {
     for (int r = 0; r < 32; ++r) {
-        for (int c = 0; c < 8; ++c) {
+        for (int c = 0; c < 16; ++c) {
             a[r][c] = r + c; // The value you like
         }
     }
 }
 
-void init_mat_b(int8_t b[32][8]) {
+void init_mat_b(int8_t b[32][16]) {
     for (int r = 0; r < 32; ++r) {
-        for (int c = 0; c < 8; ++c) {
+        for (int c = 0; c < 16; ++c) {
             b[r][c] = r - c; // The value you like
         }
     }
 }
 
-void print_mat8x8(int32_t m[8][8]) {
+void print_dword16x16(int32_t m[16][16]) {
     for (int r = 0; r < 8; ++r) {
         for (int c = 0; c < 8; ++c) {
             printf("%d ", m[r][c]);
@@ -43,9 +43,9 @@ void print_mat8x8(int32_t m[8][8]) {
 // -----------------------------------------------
 
 // Multiply A and B using naive method
-void mul_naive(int32_t c[8][8], const int8_t a[8][32], const int8_t b[32][8]) {
-    for (int i = 0; i < 8; ++i) {
-        for (int j = 0; j < 8; ++j) {
+void mul_naive(int32_t c[16][16], int8_t a[16][32], int8_t b[32][16]) {
+    for (int i = 0; i < 16; ++i) {
+        for (int j = 0; j < 16; ++j) {
             c[i][j] = 0;
             for (int k = 0; k < 32; ++k) {
                 c[i][j] += a[i][k] * b[k][j];
@@ -83,26 +83,31 @@ void init_tile_config() {
     tile.palette_id = 1; // This value is always 0 when using AMX
     tile.start_row = 0;
 
-    // config for int8 c[8][8]
-    tile.colsb[TILE_0] = 8 * sizeof(int32_t);
-    tile.rows[TILE_0] = 8;
+    // tile.colsb (columns in bytes) range: [0, 63]
+    // tile.row range: [0, 15]
 
-    // config for int8 a[8][32]
-    tile.colsb[TILE_1] = 32 * sizeof(int8_t);
-    tile.rows[TILE_1] = 8;
+    // config for int8 c[16][16]
+    tile.colsb[TILE_0] = 16 * sizeof(int32_t); // 64
+    tile.rows[TILE_0] = 16;
 
-    // config for int8 b[32][8]
+    // config for int8 a[16][32]
+    tile.colsb[TILE_1] = 32 * sizeof(int8_t); // 32
+    tile.rows[TILE_1] = 16;
+
+    // config for int8 b[32][16]
     // The alignment of B in AMX is a bit tricky.
     // The rows of B are divided by 4 byte elements.
-    tile.colsb[TILE_2] = (8 * 4) * sizeof(int8_t); // 32
-    tile.rows[TILE_2] = 32 / 4;                    // 8
+    tile.colsb[TILE_2] = (16 * 4) * sizeof(int8_t); // 64
+    tile.rows[TILE_2] = 32 / 4;                     // 8
+
+    _tile_loadconfig(&tile);
 }
 
 // Multiply A and B using AMX
-void mul_amx(int32_t c[8][8], const int8_t a[8][32], const int8_t b[32][8]) {
-    int8_t b_transformed[8][32];
+void mul_amx(int32_t c[16][16], int8_t a[16][32], int8_t b[32][16]) {
+    int8_t b_transformed[8][64];
     for (int r = 0; r < 32; ++r) {
-        for (int c = 0; c < 8; ++c) {
+        for (int c = 0; c < 16; ++c) {
             // The rows of B must be divided by 4 byte elements before load.
             b_transformed[r / 4][c * 4 + r % 4] = b[r][c];
         }
@@ -110,7 +115,7 @@ void mul_amx(int32_t c[8][8], const int8_t a[8][32], const int8_t b[32][8]) {
 
     // Load A and B
     _tile_loadd(TILE_1, a, 32 * sizeof(int8_t)); // The stride value specifies the row size
-    _tile_loadd(TILE_2, b_transformed, (8 * 4) * sizeof(int8_t));
+    _tile_loadd(TILE_2, b_transformed, (16 * 4) * sizeof(int8_t));
 
     // Initialize a tile for C
     _tile_zero(TILE_0);
@@ -119,7 +124,7 @@ void mul_amx(int32_t c[8][8], const int8_t a[8][32], const int8_t b[32][8]) {
     _tile_dpbssd(TILE_0, TILE_1, TILE_2);
 
     // Store the result back to C
-    _tile_stored(TILE_0, c, 8 * sizeof(int32_t));
+    _tile_stored(TILE_0, c, 16 * sizeof(int32_t));
 }
 
 // -----------------------------------------------
@@ -129,28 +134,30 @@ int main() {
     if (syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA)) {
         printf("\n Fail to do XFEATURE_XTILEDATA \n\n");
         fflush(stdout);
-        return false;
-    } else {
-        return true;
+        return 1;
     }
 #endif
 
-    int8_t a[8][32];
-    int8_t b[32][8];
+    int8_t a[16][32];
+    int8_t b[32][16];
 
     init_mat_a(a);
     init_mat_b(b);
 
-    int32_t c_naive[8][8];
-    int32_t c_amx[8][8];
+    int32_t c_naive[16][16];
+    int32_t c_amx[16][16];
 
     mul_naive(c_naive, a, b);
+
+    init_tile_config();
     mul_amx(c_amx, a, b);
 
     printf("----------------------------------------------- Naive result\n");
-    print_mat8x8(c_naive);
+    print_dword16x16(c_naive);
     printf("----------------------------------------------- AMX result\n");
-    print_mat8x8(c_amx);
+    print_dword16x16(c_amx);
 
     _tile_release(); // Release the AMX state
+
+    return 0;
 }
