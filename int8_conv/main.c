@@ -88,11 +88,11 @@ void print_output_data(const output_data_t *output) {
 void conv_naive(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
     for (int r = 0; r <= INPUT_ROWS - FILTER_SIZE; ++r) {
         for (int c = 0; c <= INPUT_COLS - FILTER_SIZE; ++c) {
-            for (int ich = 0; ich < INPUT_CH; ++ich) {
-                output->rows[r].cols[c].ch[ich] = 0;
+            for (int och = 0; och < OUTPUT_CH; ++och) {
+                output->rows[r].cols[c].ch[och] = 0;
                 for (int fr = 0; fr < FILTER_SIZE; ++fr) {
                     for (int fc = 0; fc < FILTER_SIZE; ++fc) {
-                        for (int och = 0; och < OUTPUT_CH; ++och) {
+                        for (int ich = 0; ich < INPUT_CH; ++ich) {
                             output->rows[r].cols[c].ch[och] +=
                                 input->rows[r + fr].cols[c + fc].ch[ich] * filter[ich].rows[fr].cols[fc].ch[och];
                         }
@@ -133,7 +133,7 @@ typedef struct tile_config_t {
 
 typedef struct tfilter_t {
     struct {
-        uint8_t cols[TFILETER_COLS];
+        int8_t cols[TFILETER_COLS];
     } rows[TFILETER_ROWS];
 } tfilter_t;
 
