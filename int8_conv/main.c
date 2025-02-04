@@ -17,9 +17,9 @@
 
 #define INPUT_ROWS 160
 #define INPUT_COLS 160
-#define INPUT_CH 4
+#define INPUT_CH 3
 
-#define OUTPUT_CH 8
+#define OUTPUT_CH 6
 
 #define FILTER_SIZE 3
 
@@ -39,13 +39,13 @@ typedef struct output_data_t {
     } rows[INPUT_ROWS];
 } output_data_t;
 
-typedef struct filter_data_t {
+typedef struct filter_t {
     struct {
         struct {
             int8_t ch[OUTPUT_CH];
         } cols[FILTER_SIZE];
     } rows[FILTER_SIZE];
-} filter_data_t;
+} filter_t;
 
 void init_input_data(input_data_t *input) {
     for (int r = 0; r < INPUT_ROWS; ++r) {
@@ -57,7 +57,7 @@ void init_input_data(input_data_t *input) {
     }
 }
 
-void init_filter_data(filter_data_t filter[INPUT_CH]) {
+void init_filter_data(filter_t filter[INPUT_CH]) {
     for (int ic = 0; ic < INPUT_CH; ic++) {
         for (int r = 0; r < FILTER_SIZE; ++r) {
             for (int c = 0; c < FILTER_SIZE; ++c) {
@@ -69,9 +69,23 @@ void init_filter_data(filter_data_t filter[INPUT_CH]) {
     }
 }
 
+void print_output_data(const output_data_t *output) {
+    for (int r = 0; r < INPUT_ROWS; ++r) {
+        for (int c = 0; c < INPUT_COLS; ++c) {
+            for (int oc = 0; oc < OUTPUT_CH; ++oc) {
+                printf("%d", output->rows[r].cols[c].ch[oc]);
+                if (oc < OUTPUT_CH - 1)
+                    printf(", ");
+            }
+            printf("; ");
+        }
+        printf("\n");
+    }
+}
+
 // -----------------------------------------------
 
-void conv_naive(output_data_t *output, const input_data_t *input, const filter_data_t filter[INPUT_CH]) {
+void conv_naive(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
     for (int r = 0; r < INPUT_ROWS; ++r) {
         for (int c = 0; c < INPUT_COLS; ++c) {
             for (int ic = 0; ic < INPUT_CH; ++ic) {
@@ -112,7 +126,37 @@ typedef struct tile_config_t {
 #define TILE_6 6
 #define TILE_7 7
 
-void init_tile_config() {
+#define TFILTER_ELEMS ((FILTER_SIZE * INPUT_CH) + (4 - (FILTER_SIZE * INPUT_CH) % 4))
+
+#define TFILETER_ROWS (TFILTER_ELEMS / 4)
+#define TFILETER_COLS (OUTPUT_CH * 4)
+
+typedef struct tfilter_t {
+    struct {
+        uint8_t cols[TFILETER_COLS];
+    } rows[TFILETER_ROWS];
+} tfilter_t;
+
+void transform_filter(tfilter_t tfilter[FILTER_SIZE], const filter_t filter[INPUT_CH]) {
+    memset(tfilter, 0, sizeof(tfilter_t) * FILTER_SIZE);
+
+    for (int r = 0; r < FILTER_SIZE; ++r) {
+        for (int c = 0; c < FILTER_SIZE; ++c) {
+            for (int n = 0; n < OUTPUT_CH; ++n) {
+                for (int ich = 0; ich < INPUT_CH; ++ich) {
+                    const int c2 = n;
+                    const int r2 = c * INPUT_CH + ich;
+
+                    tfilter[r].rows[r2 / 4].cols[c2 * 4 + r2 % 4] = (filter[ich].rows[r].cols[c].ch[n]);
+                }
+            }
+        }
+    }
+}
+
+// -----------------------------------------------
+
+void conv_amx(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
     tile_config_t tile = {0};
 
     tile.palette_id = 1; // This value is always 0 when using AMX
@@ -121,7 +165,7 @@ void init_tile_config() {
     // tile.colsb (columns in bytes) range: [0, 63]
     // tile.row range: [0, 15]
 
-    // config for int8 c[16][16]
+    // config for filter
     tile.colsb[TILE_0] = 16 * sizeof(int32_t); // 64
     tile.rows[TILE_0] = 16;
 
@@ -136,9 +180,7 @@ void init_tile_config() {
     tile.rows[TILE_2] = 32 / 4;                     // 8
 
     _tile_loadconfig(&tile);
-}
 
-void conv_amx(output_data_t *output, const input_data_t *input, const filter_data_t filter[INPUT_CH]) {
     // TODO
 }
 
@@ -153,24 +195,31 @@ int main() {
     }
 #endif
 
-    int8_t a[16][32];
-    int8_t b[32][16];
+    input_data_t *input;
+    input = (input_data_t *)malloc(sizeof(input_data_t));
+    init_input_data(input);
 
-    init_mat_a(a);
-    init_mat_b(b);
+    filter_t filter[INPUT_CH];
+    init_filter_data(filter);
 
-    int32_t c_naive[16][16];
-    int32_t c_amx[16][16];
+    output_data_t *output_naive;
+    output_naive = (output_data_t *)malloc(sizeof(output_data_t));
+    memset(output_naive, 0, sizeof(output_data_t));
 
-    mul_naive(c_naive, a, b);
+    output_data_t *output_amx;
+    output_amx = (output_data_t *)malloc(sizeof(output_data_t));
+    memset(output_amx, 0, sizeof(output_data_t));
 
-    init_tile_config();
-    mul_amx(c_amx, a, b);
+    // -----------------------------------------------
+
+    conv_naive(output_naive, input, filter);
+
+    // -----------------------------------------------
 
     printf("----------------------------------------------- Naive result\n");
-    print_dword16x16(c_naive);
+    print_output_data(output_naive);
     printf("----------------------------------------------- AMX result\n");
-    print_dword16x16(c_amx);
+    print_output_data(output_amx);
 
     _tile_release(); // Release the AMX state
 
