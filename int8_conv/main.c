@@ -86,8 +86,8 @@ void print_output_data(const output_data_t *output) {
 // -----------------------------------------------
 
 void conv_naive(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
-    for (int r = 0; r < INPUT_ROWS; ++r) {
-        for (int c = 0; c < INPUT_COLS; ++c) {
+    for (int r = 0; r <= INPUT_ROWS - FILTER_SIZE; ++r) {
+        for (int c = 0; c <= INPUT_COLS - FILTER_SIZE; ++c) {
             for (int ich = 0; ich < INPUT_CH; ++ich) {
                 output->rows[r].cols[c].ch[ich] = 0;
                 for (int fr = 0; fr < FILTER_SIZE; ++fr) {
@@ -142,12 +142,12 @@ void transform_filter(tfilter_t tfilter[FILTER_SIZE], const filter_t filter[INPU
 
     for (int r = 0; r < FILTER_SIZE; ++r) {
         for (int c = 0; c < FILTER_SIZE; ++c) {
-            for (int n = 0; n < OUTPUT_CH; ++n) {
+            for (int och = 0; och < OUTPUT_CH; ++och) {
                 for (int ich = 0; ich < INPUT_CH; ++ich) {
-                    const int c2 = n;
+                    const int c2 = och;
                     const int r2 = c * INPUT_CH + ich;
 
-                    tfilter[r].rows[r2 / 4].cols[c2 * 4 + r2 % 4] = (filter[ich].rows[r].cols[c].ch[n]);
+                    tfilter[r].rows[r2 / 4].cols[c2 * 4 + r2 % 4] = (filter[ich].rows[r].cols[c].ch[och]);
                 }
             }
         }
@@ -182,8 +182,8 @@ void conv_amx(output_data_t *output, const input_data_t *input, const filter_t f
     tfilter_t tfilter[FILTER_SIZE];
     transform_filter(tfilter, filter);
 
-    for (int r = 0; r < INPUT_ROWS; ++r) {
-        for (int c = 0; c < INPUT_COLS; ++c) {
+    for (int r = 0; r <= INPUT_ROWS - FILTER_SIZE; ++r) {
+        for (int c = 0; c <= INPUT_COLS - FILTER_SIZE; ++c) {
             _tile_zero(TILE_1);
 
             for (int acc = 0; acc < FILTER_SIZE; ++acc) {
@@ -227,13 +227,14 @@ int main() {
     // -----------------------------------------------
 
     conv_naive(output_naive, input, filter);
-
-    // -----------------------------------------------
-
     printf("----------------------------------------------- Naive result\n");
     print_output_data(output_naive);
+
+    conv_amx(output_amx, input, filter);
     printf("----------------------------------------------- AMX result\n");
     print_output_data(output_amx);
+
+    // -----------------------------------------------
 
     _tile_release(); // Release the AMX state
 
