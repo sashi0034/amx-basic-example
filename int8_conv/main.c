@@ -155,7 +155,7 @@ void transform_filter(tfilter_t tfilter[FILTER_SIZE], const filter_t filter[INPU
 }
 
 // -----------------------------------------------
-
+// Normal convolution operation with AMX
 void conv_amx(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
     // Load configuraion for convolution
     tile_config_t tile = {0};
@@ -199,6 +199,248 @@ void conv_amx(output_data_t *output, const input_data_t *input, const filter_t f
 }
 
 // -----------------------------------------------
+// V2: Use 7 rows, not just 3 tiles
+// This is abount 2-3 times faster than the normal
+void conv_amx_v2(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
+    // Load configuraion for convolution
+    tile_config_t tile = {0};
+
+    tile.palette_id = 1;
+    tile.start_row = 0;
+
+    // config for filter
+    tile.colsb[TILE_0] = TFILETER_COLS * sizeof(int8_t);
+    tile.rows[TILE_0] = TFILETER_ROWS;
+
+    tile.colsb[TILE_1] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_1] = 1;
+
+    tile.colsb[TILE_2] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_2] = 1;
+
+    tile.colsb[TILE_3] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_3] = 1;
+
+    tile.colsb[TILE_4] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_4] = 1;
+
+    tile.colsb[TILE_5] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_5] = 1;
+
+    tile.colsb[TILE_6] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_6] = 1;
+
+    _tile_loadconfig(&tile);
+
+    // -----------------------------------------------
+
+    tfilter_t tfilter[FILTER_SIZE];
+    transform_filter(tfilter, filter);
+
+    for (int r = 0; r <= INPUT_ROWS - FILTER_SIZE; ++r) {
+        for (int c = 0; c <= INPUT_COLS - FILTER_SIZE - 3; c += 3) {
+            _tile_zero(TILE_1);
+            _tile_zero(TILE_3);
+            _tile_zero(TILE_5);
+
+            for (int acc = 0; acc < FILTER_SIZE; ++acc) {
+                _tile_loadd(TILE_0, &tfilter[acc].rows[0].cols[0], TFILETER_COLS * sizeof(int8_t));
+
+                _tile_loadd(TILE_2, &input->rows[r + acc].cols[c].ch[0], 0);
+                _tile_dpbssd(TILE_1, TILE_2, TILE_0);
+
+                _tile_loadd(TILE_4, &input->rows[r + acc].cols[c + 1].ch[0], 0);
+                _tile_dpbssd(TILE_3, TILE_4, TILE_0);
+
+                _tile_loadd(TILE_6, &input->rows[r + acc].cols[c + 2].ch[0], 0);
+                _tile_dpbssd(TILE_5, TILE_6, TILE_0);
+            }
+
+            _tile_stored(TILE_1, &output->rows[r].cols[c].ch[0], 0);
+            _tile_stored(TILE_3, &output->rows[r].cols[c + 1].ch[0], 0);
+            _tile_stored(TILE_5, &output->rows[r].cols[c + 2].ch[0], 0);
+        }
+
+        // Remainder Block
+        {
+            const int c = INPUT_COLS - FILTER_SIZE - 3;
+
+            _tile_zero(TILE_1);
+            _tile_zero(TILE_3);
+            _tile_zero(TILE_5);
+
+            for (int acc = 0; acc < FILTER_SIZE; ++acc) {
+                _tile_loadd(TILE_0, &tfilter[acc].rows[0].cols[0], TFILETER_COLS * sizeof(int8_t));
+
+                _tile_loadd(TILE_2, &input->rows[r + acc].cols[c].ch[0], 0);
+                _tile_dpbssd(TILE_1, TILE_2, TILE_0);
+
+                _tile_loadd(TILE_4, &input->rows[r + acc].cols[c + 1].ch[0], 0);
+                _tile_dpbssd(TILE_3, TILE_4, TILE_0);
+
+                _tile_loadd(TILE_6, &input->rows[r + acc].cols[c + 2].ch[0], 0);
+                _tile_dpbssd(TILE_5, TILE_6, TILE_0);
+            }
+
+            _tile_stored(TILE_1, &output->rows[r].cols[c].ch[0], 0);
+            _tile_stored(TILE_3, &output->rows[r].cols[c + 1].ch[0], 0);
+            _tile_stored(TILE_5, &output->rows[r].cols[c + 2].ch[0], 0);
+        }
+    }
+}
+
+// -----------------------------------------------
+// V3: Use all 16 rows, not just one
+// This is abount 7 times faster than the normal
+void conv_amx_v3(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
+    // Load configuraion for convolution
+    tile_config_t tile = {0};
+
+    tile.palette_id = 1;
+    tile.start_row = 0;
+
+    // config for filter
+    tile.colsb[TILE_0] = TFILETER_COLS * sizeof(int8_t);
+    tile.rows[TILE_0] = TFILETER_ROWS;
+
+    // config for output data
+    tile.colsb[TILE_1] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_1] = 16;
+
+    // config for input data
+    tile.colsb[TILE_2] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_2] = 16;
+
+    _tile_loadconfig(&tile);
+
+    // -----------------------------------------------
+
+    tfilter_t tfilter[FILTER_SIZE];
+    transform_filter(tfilter, filter);
+
+    for (int r = 0; r <= INPUT_ROWS - FILTER_SIZE; ++r) {
+        for (int c = 0; c <= INPUT_COLS - FILTER_SIZE - 16; c += 16) {
+            _tile_zero(TILE_1);
+
+            for (int acc = 0; acc < FILTER_SIZE; ++acc) {
+                _tile_loadd(TILE_0, &tfilter[acc].rows[0].cols[0], TFILETER_COLS * sizeof(int8_t));
+                _tile_loadd(TILE_2, &input->rows[r + acc].cols[c].ch[0], INPUT_CH * sizeof(int8_t));
+
+                _tile_dpbssd(TILE_1, TILE_2, TILE_0);
+            }
+
+            _tile_stored(TILE_1, &output->rows[r].cols[c].ch[0], OUTPUT_CH * sizeof(int32_t));
+        }
+
+        // Remainder Block
+        {
+            const int c = INPUT_COLS - FILTER_SIZE - 16;
+            _tile_zero(TILE_1);
+
+            for (int acc = 0; acc < FILTER_SIZE; ++acc) {
+                _tile_loadd(TILE_0, &tfilter[acc].rows[0].cols[0], TFILETER_COLS * sizeof(int8_t));
+                _tile_loadd(TILE_2, &input->rows[r + acc].cols[c].ch[0], INPUT_CH * sizeof(int8_t));
+
+                _tile_dpbssd(TILE_1, TILE_2, TILE_0);
+            }
+
+            _tile_stored(TILE_1, &output->rows[r].cols[c].ch[0], OUTPUT_CH * sizeof(int32_t));
+        }
+    }
+}
+
+// -----------------------------------------------
+// V4: Combine V2 and V3
+// This is abount 7-8 times faster than the normal
+void conv_amx_v4(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
+    // Load configuraion for convolution
+    tile_config_t tile = {0};
+
+    tile.palette_id = 1;
+    tile.start_row = 0;
+
+    // config for filter
+    tile.colsb[TILE_0] = TFILETER_COLS * sizeof(int8_t);
+    tile.rows[TILE_0] = TFILETER_ROWS;
+
+    tile.colsb[TILE_1] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_1] = 16;
+
+    tile.colsb[TILE_2] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_2] = 16;
+
+    tile.colsb[TILE_3] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_3] = 16;
+
+    tile.colsb[TILE_4] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_4] = 16;
+
+    tile.colsb[TILE_5] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_5] = 16;
+
+    tile.colsb[TILE_6] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_6] = 16;
+
+    _tile_loadconfig(&tile);
+
+    // -----------------------------------------------
+
+    tfilter_t tfilter[FILTER_SIZE];
+    transform_filter(tfilter, filter);
+
+    for (int r = 0; r <= INPUT_ROWS - FILTER_SIZE; ++r) {
+        for (int c = 0; c <= INPUT_COLS - FILTER_SIZE - 16 * 3; c += 16 * 3) {
+            _tile_zero(TILE_1);
+            _tile_zero(TILE_3);
+            _tile_zero(TILE_5);
+
+            for (int acc = 0; acc < FILTER_SIZE; ++acc) {
+                _tile_loadd(TILE_0, &tfilter[acc].rows[0].cols[0], TFILETER_COLS * sizeof(int8_t));
+
+                _tile_loadd(TILE_2, &input->rows[r + acc].cols[c].ch[0], INPUT_CH * sizeof(int8_t));
+                _tile_dpbssd(TILE_1, TILE_2, TILE_0);
+
+                _tile_loadd(TILE_4, &input->rows[r + acc].cols[c + 16].ch[0], INPUT_CH * sizeof(int8_t));
+                _tile_dpbssd(TILE_3, TILE_4, TILE_0);
+
+                _tile_loadd(TILE_6, &input->rows[r + acc].cols[c + 16 * 2].ch[0], INPUT_CH * sizeof(int8_t));
+                _tile_dpbssd(TILE_5, TILE_6, TILE_0);
+            }
+
+            _tile_stored(TILE_1, &output->rows[r].cols[c].ch[0], OUTPUT_CH * sizeof(int32_t));
+            _tile_stored(TILE_3, &output->rows[r].cols[c + 16].ch[0], OUTPUT_CH * sizeof(int32_t));
+            _tile_stored(TILE_5, &output->rows[r].cols[c + 16 * 2].ch[0], OUTPUT_CH * sizeof(int32_t));
+        }
+
+        // Remainder Block
+        {
+            const int c = INPUT_COLS - FILTER_SIZE - 16 * 3;
+
+            _tile_zero(TILE_1);
+            _tile_zero(TILE_3);
+            _tile_zero(TILE_5);
+
+            for (int acc = 0; acc < FILTER_SIZE; ++acc) {
+                _tile_loadd(TILE_0, &tfilter[acc].rows[0].cols[0], TFILETER_COLS * sizeof(int8_t));
+
+                _tile_loadd(TILE_2, &input->rows[r + acc].cols[c].ch[0], INPUT_CH * sizeof(int8_t));
+                _tile_dpbssd(TILE_1, TILE_2, TILE_0);
+
+                _tile_loadd(TILE_4, &input->rows[r + acc].cols[c + 16].ch[0], INPUT_CH * sizeof(int8_t));
+                _tile_dpbssd(TILE_3, TILE_4, TILE_0);
+
+                _tile_loadd(TILE_6, &input->rows[r + acc].cols[c + 16 * 2].ch[0], INPUT_CH * sizeof(int8_t));
+                _tile_dpbssd(TILE_5, TILE_6, TILE_0);
+            }
+
+            _tile_stored(TILE_1, &output->rows[r].cols[c].ch[0], OUTPUT_CH * sizeof(int32_t));
+            _tile_stored(TILE_3, &output->rows[r].cols[c + 16].ch[0], OUTPUT_CH * sizeof(int32_t));
+            _tile_stored(TILE_5, &output->rows[r].cols[c + 16 * 2].ch[0], OUTPUT_CH * sizeof(int32_t));
+        }
+    }
+}
+
+// -----------------------------------------------
 
 int main() {
 #if defined(__linux__)
@@ -224,17 +466,37 @@ int main() {
     output_amx = (output_data_t *)malloc(sizeof(output_data_t));
     memset(output_amx, 0, sizeof(output_data_t));
 
+    output_data_t *output_amx_v2;
+    output_amx_v2 = (output_data_t *)malloc(sizeof(output_data_t));
+    memset(output_amx_v2, 0, sizeof(output_data_t));
+
+    output_data_t *output_amx_v3;
+    output_amx_v3 = (output_data_t *)malloc(sizeof(output_data_t));
+    memset(output_amx_v3, 0, sizeof(output_data_t));
+
+    output_data_t *output_amx_v4;
+    output_amx_v4 = (output_data_t *)malloc(sizeof(output_data_t));
+    memset(output_amx_v4, 0, sizeof(output_data_t));
+
     // -----------------------------------------------
 
     conv_naive(output_naive, input, filter);
-    printf("----------------------------------------------- Naive result\n");
-    print_output_data(output_naive);
-
     conv_amx(output_amx, input, filter);
-    printf("----------------------------------------------- AMX result\n");
-    print_output_data(output_amx);
+    conv_amx_v2(output_amx_v2, input, filter);
+    conv_amx_v3(output_amx_v3, input, filter);
+    conv_amx_v4(output_amx_v4, input, filter);
 
     // -----------------------------------------------
+
+    printf("----------------------------------------------- Naive result\n");
+    print_output_data(output_naive);
+    printf("----------------------------------------------- AMX result\n");
+    print_output_data(output_amx);
+    printf("----------------------------------------------- AMX result (V2)\n");
+    print_output_data(output_amx_v2);
+    printf("----------------------------------------------- AMX result (V3)\n");
+    print_output_data(output_amx_v3);
+    printf("----------------------------------------------- AMX result (V4)\n");
 
     _tile_release(); // Release the AMX state
 
