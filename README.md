@@ -1,6 +1,6 @@
 # amx-basic-example
 
-This repository contains basic example code using Intel AMX.
+This repository contains unofficial example code using [Intel AMX](https://www.intel.com/content/www/us/en/products/docs/accelerator-engines/advanced-matrix-extensions/overview.html).
 
 # Matrix product operation using AMX
 
@@ -29,3 +29,7 @@ Note that AMX multiply instructions are accumulative, not overwritten.
 cd int8_conv
 icc int8_conv -o int8_conv
 ```
+
+# References
+
+- [Intel Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#!=undefined&techs=AMX)
