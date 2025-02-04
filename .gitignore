@@ -2,3 +2,4 @@
 
 int8_mul/int8_mul
 bf16_mul/bf16_mul
+int8_conv/int8_conv
