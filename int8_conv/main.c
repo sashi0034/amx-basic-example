@@ -50,19 +50,19 @@ typedef struct filter_t {
 void init_input_data(input_data_t *input) {
     for (int r = 0; r < INPUT_ROWS; ++r) {
         for (int c = 0; c < INPUT_COLS; ++c) {
-            for (int ic = 0; ic < INPUT_CH; ++ic) {
-                input->rows[r].cols[c].ch[ic] = r - c + ic; // The value you like
+            for (int ich = 0; ich < INPUT_CH; ++ich) {
+                input->rows[r].cols[c].ch[ich] = r - c + ich; // The value you like
             }
         }
     }
 }
 
 void init_filter_data(filter_t filter[INPUT_CH]) {
-    for (int ic = 0; ic < INPUT_CH; ic++) {
+    for (int ich = 0; ich < INPUT_CH; ich++) {
         for (int r = 0; r < FILTER_SIZE; ++r) {
             for (int c = 0; c < FILTER_SIZE; ++c) {
-                for (int oc = 0; oc < OUTPUT_CH; ++oc) {
-                    filter[ic].rows[r].cols[c].ch[oc] = ic + r - c - oc; // The value you like
+                for (int och = 0; och < OUTPUT_CH; ++och) {
+                    filter[ich].rows[r].cols[c].ch[och] = ich + r - c - och; // The value you like
                 }
             }
         }
@@ -72,9 +72,9 @@ void init_filter_data(filter_t filter[INPUT_CH]) {
 void print_output_data(const output_data_t *output) {
     for (int r = 0; r < INPUT_ROWS; ++r) {
         for (int c = 0; c < INPUT_COLS; ++c) {
-            for (int oc = 0; oc < OUTPUT_CH; ++oc) {
-                printf("%d", output->rows[r].cols[c].ch[oc]);
-                if (oc < OUTPUT_CH - 1)
+            for (int och = 0; och < OUTPUT_CH; ++och) {
+                printf("%d", output->rows[r].cols[c].ch[och]);
+                if (och < OUTPUT_CH - 1)
                     printf(", ");
             }
             printf("; ");
@@ -88,13 +88,13 @@ void print_output_data(const output_data_t *output) {
 void conv_naive(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
     for (int r = 0; r < INPUT_ROWS; ++r) {
         for (int c = 0; c < INPUT_COLS; ++c) {
-            for (int ic = 0; ic < INPUT_CH; ++ic) {
-                output->rows[r].cols[c].ch[ic] = 0;
+            for (int ich = 0; ich < INPUT_CH; ++ich) {
+                output->rows[r].cols[c].ch[ich] = 0;
                 for (int fr = 0; fr < FILTER_SIZE; ++fr) {
                     for (int fc = 0; fc < FILTER_SIZE; ++fc) {
-                        for (int oc = 0; oc < OUTPUT_CH; ++oc) {
-                            output->rows[r].cols[c].ch[oc] +=
-                                input->rows[r + fr].cols[c + fc].ch[ic] * filter[ic].rows[fr].cols[fc].ch[oc];
+                        for (int och = 0; och < OUTPUT_CH; ++och) {
+                            output->rows[r].cols[c].ch[och] +=
+                                input->rows[r + fr].cols[c + fc].ch[ich] * filter[ich].rows[fr].cols[fc].ch[och];
                         }
                     }
                 }
@@ -157,31 +157,45 @@ void transform_filter(tfilter_t tfilter[FILTER_SIZE], const filter_t filter[INPU
 // -----------------------------------------------
 
 void conv_amx(output_data_t *output, const input_data_t *input, const filter_t filter[INPUT_CH]) {
+    // Load configuraion for convolution
     tile_config_t tile = {0};
 
-    tile.palette_id = 1; // This value is always 0 when using AMX
+    tile.palette_id = 1;
     tile.start_row = 0;
 
-    // tile.colsb (columns in bytes) range: [0, 63]
-    // tile.row range: [0, 15]
-
     // config for filter
-    tile.colsb[TILE_0] = 16 * sizeof(int32_t); // 64
-    tile.rows[TILE_0] = 16;
+    tile.colsb[TILE_0] = TFILETER_COLS * sizeof(int8_t);
+    tile.rows[TILE_0] = TFILETER_ROWS;
 
-    // config for int8 a[16][32]
-    tile.colsb[TILE_1] = 32 * sizeof(int8_t); // 32
-    tile.rows[TILE_1] = 16;
+    // config for output data
+    tile.colsb[TILE_1] = OUTPUT_CH * sizeof(int32_t);
+    tile.rows[TILE_1] = 1;
 
-    // config for int8 b[32][16]
-    // The alignment of B in AMX is a bit tricky.
-    // The rows of B are divided by 4 byte elements.
-    tile.colsb[TILE_2] = (16 * 4) * sizeof(int8_t); // 64
-    tile.rows[TILE_2] = 32 / 4;                     // 8
+    // config for input data
+    tile.colsb[TILE_2] = TFILTER_ELEMS * sizeof(int8_t);
+    tile.rows[TILE_2] = 1;
 
     _tile_loadconfig(&tile);
 
-    // TODO
+    // -----------------------------------------------
+
+    tfilter_t tfilter[FILTER_SIZE];
+    transform_filter(tfilter, filter);
+
+    for (int r = 0; r < INPUT_ROWS; ++r) {
+        for (int c = 0; c < INPUT_COLS; ++c) {
+            _tile_zero(TILE_1);
+
+            for (int acc = 0; acc < FILTER_SIZE; ++acc) {
+                _tile_loadd(TILE_0, &tfilter[acc].rows[0].cols[0], TFILETER_COLS * sizeof(int8_t));
+                _tile_loadd(TILE_2, &input->rows[r + acc].cols[c].ch[0], 0);
+
+                _tile_dpbssd(TILE_1, TILE_2, TILE_0);
+            }
+
+            _tile_stored(TILE_1, &output->rows[r].cols[c].ch[0], 0);
+        }
+    }
 }
 
 // -----------------------------------------------
